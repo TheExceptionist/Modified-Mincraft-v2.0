@@ -1,0 +1,458 @@
+package com.mojang.ld22;
+
+import java.awt.BorderLayout;
+import java.awt.Canvas;
+import java.awt.Dimension;
+import java.awt.Graphics;
+import java.awt.image.BufferStrategy;
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.io.File;
+import java.io.IOException;
+import java.util.Random;
+
+import javax.imageio.ImageIO;
+import javax.swing.JFrame;
+
+import com.mojang.ld22.entity.Player;
+import com.mojang.ld22.gfx.Color;
+import com.mojang.ld22.gfx.Font;
+import com.mojang.ld22.gfx.Screen;
+import com.mojang.ld22.gfx.SpriteSheet;
+import com.mojang.ld22.item.ResourceItem;
+import com.mojang.ld22.item.resource.Resource;
+import com.mojang.ld22.level.Level;
+import com.mojang.ld22.level.tile.Tile;
+import com.mojang.ld22.saveload.DATA;
+import com.mojang.ld22.saveload.Save;
+import com.mojang.ld22.screen.DeadMenu;
+import com.mojang.ld22.screen.LevelTransitionMenu;
+import com.mojang.ld22.screen.Menu;
+import com.mojang.ld22.screen.TitleMenu;
+import com.mojang.ld22.screen.WonMenu;
+
+public class Game extends Canvas implements Runnable {
+	private static final long serialVersionUID = 1L;
+	@SuppressWarnings("unused")
+	private Random random = new Random();
+	public static final String NAME = "Modified Minicraft v1.3.5";
+	private int autosaveDelay = 7200; // 3600 is ~1min
+	private int autosaveTick = 0;
+	private String autosaveText = "";
+	public static String eventText = "";
+	
+	public static int HEIGHT = 220; //Integer.parseInt(JOptionPane.showInputDialog("Enter Desired Screen Height.  *Default: 120"));
+	public static int WIDTH = 400; //Integer.parseInt(JOptionPane.showInputDialog("Enter Desired Screen Width.  *Default: 160"));
+	
+	private static final int SCALE = 3;
+	private boolean startup = true;
+
+	private BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_INT_RGB);
+	private int[] pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+	private boolean running = false;
+	private Screen screen;
+	private Screen lightScreen;
+	private InputHandler input = new InputHandler(this);
+
+	private int[] colors = new int[256];
+	private int tickCount = 0;
+	public int gameTime = 0;
+	public int inGameTime = 0;
+	public int nightTime = 0;
+
+	private Level level;
+	public static Level[] levels = new Level[5];
+	public static int currentLevel = 3;
+	public Player player;
+
+	public Menu menu;
+	private int playerDeadTime;
+	private int pendingLevelChange;
+	private int wonTimer = 0;
+	public boolean hasWon = false;
+
+	public void setMenu(Menu menu) {
+		this.menu = menu;
+		if (menu != null) menu.init(this, input, player);
+	}
+	
+	public Menu getMenu(){
+		return menu;
+	}
+
+	public void start() {
+		running = true;
+		new Thread(this).start();
+	}
+
+	public void stop() {
+		running = false;
+	}
+
+	public void resetGame() {
+		playerDeadTime = 0;
+		wonTimer = 0;
+		gameTime = 0;
+		hasWon = false;
+
+		levels = new Level[5];
+		currentLevel = 3;
+
+		levels[4] = new Level(128, 128, 1, null);
+		levels[3] = new Level(128, 128, 0, levels[4]);
+		levels[2] = new Level(128, 128, -1, levels[3]);
+		levels[1] = new Level(128, 128, -2, levels[2]);
+		levels[0] = new Level(128, 128, -3, levels[1]);
+
+		level = levels[currentLevel];
+		player = new Player(this, input);
+		player.findStartPos(level);
+
+		level.add(player);
+
+		for (int i = 0; i < 5; i++) {
+			levels[i].trySpawn(5000);
+		}
+	}
+
+	private void init() {
+		int pp = 0;
+		for (int r = 0; r < 6; r++) {
+			for (int g = 0; g < 6; g++) {
+				for (int b = 0; b < 6; b++) {
+					int rr = (r * 255 / 5);
+					int gg = (g * 255 / 5);
+					int bb = (b * 255 / 5);
+					int mid = (rr * 30 + gg * 59 + bb * 11) / 100;
+
+					int r1 = ((rr + mid * 1) / 2) * 230 / 255 + 10;
+					int g1 = ((gg + mid * 1) / 2) * 230 / 255 + 10;
+					int b1 = ((bb + mid * 1) / 2) * 230 / 255 + 10;
+					colors[pp++] = r1 << 16 | g1 << 8 | b1;
+
+				}
+			}
+		}
+		try {
+			screen = new Screen(WIDTH, HEIGHT, new SpriteSheet(ImageIO.read(Game.class.getResourceAsStream("/icons.png"))));
+			lightScreen = new Screen(WIDTH, HEIGHT, new SpriteSheet(ImageIO.read(Game.class.getResourceAsStream("/icons.png"))));
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+
+		resetGame();
+		setMenu(new TitleMenu());
+	}
+
+	public void run() {
+		long lastTime = System.nanoTime();
+		double unprocessed = 0;
+		double nsPerTick = 1000000000.0 / 60;
+		int frames = 0;
+		int ticks = 0;
+		long lastTimer1 = System.currentTimeMillis();
+
+		init();
+
+		while (running) {
+			long now = System.nanoTime();
+			unprocessed += (now - lastTime) / nsPerTick;
+			lastTime = now;
+			boolean shouldRender = true;
+			while (unprocessed >= 1) {
+				ticks++;
+				tick();
+				unprocessed -= 1;
+				shouldRender = true;
+			}
+
+			try {
+				Thread.sleep(2);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+
+			if (shouldRender) {
+				frames++;
+				render();
+			}
+
+			if (System.currentTimeMillis() - lastTimer1 > 1000) {
+				lastTimer1 += 1000;
+				//System.out.println(ticks + " ticks, " + frames + " fps");
+				frames = 0;
+				ticks = 0;
+			}
+		}
+	}
+
+	public void tick() {
+		if (startup == true){
+			if (DATA.OPERATING_SYSTEM.indexOf("win") >= 0) {
+	            System.out.println("Windows detected");
+	            DATA.location = System.getenv("APPDATA") + "\\palm\\saves\\";
+	        } else if (DATA.OPERATING_SYSTEM.indexOf("mac") >= 0) {
+	            System.out.println("Mac detected");
+	            DATA.location = System.getProperty( "user.home" ) + "/palm/saves/";
+	        } else if (DATA.OPERATING_SYSTEM.indexOf("nix") >= 0 || DATA.OPERATING_SYSTEM.indexOf("nux") >= 0 || DATA.OPERATING_SYSTEM.indexOf("aix") > 0) {
+	            System.out.println("Unix or Linux detected");
+	            DATA.location = System.getProperty( "user.home" ) + "/palm/saves/";
+	        } else if (DATA.OPERATING_SYSTEM.indexOf("sunos") >= 0) {
+	            System.out.println("Solaris detected");
+	        } else {
+	            System.out.println("OS not found fallback to Windows");
+	            DATA.location = System.getenv("APPDATA") + "\\palm\\saves\\";
+	        }
+			File file = new File(DATA.location);
+			file.mkdirs();
+            System.out.println("Save directory: " + DATA.location);
+			startup = false;
+		}
+		tickCount++;
+		autosaveTick++;
+		
+		//System.out.println(inGameTime);
+		
+		if(tickCount % 60 == 0){
+			inGameTime++;
+		}
+		
+		if(inGameTime == (60 * 5)){
+			//nightTime = 1;
+		}
+		
+		if(inGameTime == (60 * 10)){
+			nightTime = 0;
+			inGameTime = 0;
+		}
+		
+		if(autosaveDelay <= autosaveTick){
+			System.out.println("auto saving");
+			autosaveTick = 0;
+			autosaveText = "Saved";
+			@SuppressWarnings("unused")
+			Save save = new Save("AutoSave", player);
+			System.out.println("saved");
+		}
+		if(autosaveTick >= autosaveDelay / 8){
+			autosaveText = "";
+		}
+		if (!hasFocus()) {
+			input.releaseAll();
+		} else {
+			if (!player.removed && !hasWon) gameTime++;
+
+			input.tick();
+			if (menu != null) {
+				menu.tick();
+			} else {
+				if (player.removed) {
+					playerDeadTime++;
+					if (playerDeadTime > 60) {
+						setMenu(new DeadMenu());
+					}
+				} else {
+					if (pendingLevelChange != 0) {
+						setMenu(new LevelTransitionMenu(pendingLevelChange));
+						pendingLevelChange = 0;
+					}
+				}
+				if (wonTimer > 0) {
+					if (--wonTimer == 0) {
+						setMenu(new WonMenu());
+					}
+				}
+				level.tick();
+				Tile.tickCount++;
+			}
+		}
+	}
+
+	public void changeLevel(int dir) {
+		level.remove(player);
+		currentLevel += dir;
+		level = levels[currentLevel];
+		player.x = (player.x >> 4) * 16 + 8;
+		player.y = (player.y >> 4) * 16 + 8;
+		level.add(player);
+
+	}
+
+	public void render() {
+		BufferStrategy bs = getBufferStrategy();
+		if (bs == null) {
+			createBufferStrategy(3);
+			requestFocus();
+			return;
+		}
+
+		int xScroll = player.x - screen.w / 2;
+		int yScroll = player.y - (screen.h - 8) / 2;
+		if (xScroll < 16) xScroll = 16;
+		if (yScroll < 16) yScroll = 16;
+		if (xScroll > level.w * 16 - screen.w - 16) xScroll = level.w * 16 - screen.w - 16;
+		if (yScroll > level.h * 16 - screen.h - 16) yScroll = level.h * 16 - screen.h - 16;
+		if (currentLevel > 3) {
+			int col = Color.get(20, 20, 121, 121);
+			for (int y = 0; y < 14; y++)
+				for (int x = 0; x < 24; x++) {
+					screen.render(x * 8 - ((xScroll / 4) & 7), y * 8 - ((yScroll / 4) & 7), 0, col, 0);
+				}
+		}
+
+		level.renderBackground(screen, xScroll, yScroll);
+		level.renderSprites(screen, xScroll, yScroll);
+
+		if (currentLevel < 3 + nightTime) {
+			lightScreen.clear(0);
+			level.renderLight(lightScreen, xScroll, yScroll);
+			screen.overlay(lightScreen, xScroll, yScroll);
+		}
+
+		renderGui();
+
+		if (!hasFocus()) renderFocusNagger();
+
+		for (int y = 0; y < screen.h; y++) {
+			for (int x = 0; x < screen.w; x++) {
+				int cc = screen.pixels[x + y * screen.w];
+				if (cc < 255) pixels[x + y * WIDTH] = colors[cc];
+			}
+		}
+		
+		Graphics g = bs.getDrawGraphics();
+		g.fillRect(0, 0, getWidth(), getHeight());
+
+		int ww = WIDTH * 3;
+		int hh = HEIGHT * 3;
+		int xo = (getWidth() - ww) / 2;
+		int yo = (getHeight() - hh) / 2;
+		
+		//System.out.println(getHeight()+" "+getWidth()+" "+ww+" "+hh+" "+xo+" "+yo);
+		
+		g.drawImage(image, xo, yo, ww, hh, null);
+		g.dispose();
+		bs.show();
+	}
+
+	private void renderGui() {
+		for (int y = 0; y < 2; y++) {
+			for (int x = 0; x < 34; x++) {
+				screen.render(x * 8, screen.h - 16 + y * 8, 0 + 12 * 32, Color.get(000, 000, 000, 000), 0);
+			}
+		}
+
+		Font.draw(autosaveText, screen, screen.w - 8 * autosaveText.length(), 2, Color.get(-1, 222, 222, 222));
+        Font.draw(autosaveText, screen, screen.w - 8 * autosaveText.length() - 1, 1, Color.get(-1, 555, 555, 555));
+        
+        Font.draw(eventText, screen, 0, 0, Color.get(-1, 222, 222, 222));
+        
+		for (int i = 0; i < 10; i++) {
+			if (i < player.health)
+				screen.render(i * 8, screen.h - 16, 0 + 12 * 32, Color.get(000, 200, 500, 533), 0);
+			else
+				screen.render(i * 8, screen.h - 16, 0 + 12 * 32, Color.get(000, 100, 000, 000), 0);
+
+			if (i < player.armor)
+				screen.render((i+24) * 8, screen.h - 16, 2 + 12 * 32, Color.get(000, 200, 111, 533), 0);
+			else
+				screen.render((i+24)* 8, screen.h - 16, 2 + 12 * 32, Color.get(000, 100, 000, 000), 0);
+
+
+			if (i+10 < player.armor)
+				screen.render((i+24) * 8, screen.h - 8, 2 + 12 * 32, Color.get(000, 200, 111, 533), 0);
+			else
+				screen.render((i+24)* 8, screen.h - 8, 2 + 12 * 32, Color.get(000, 100, 000, 000), 0);
+			//3 + 12 * 32
+			if(player.armor > 20)
+				Font.draw("+"+(player.armor - 20), screen, (35) * 8, screen.h - 16, Color.get(000, 200, 111, 533));
+			
+		
+			if(player.inventory.count(new ResourceItem(Resource.arrow)) > 0){
+				screen.render((35) * 8, screen.h - 8, 3 + 12 * 32, Color.get(000, 200, 111, 533), 0);
+				Font.draw(""+(player.inventory.count(new ResourceItem(Resource.arrow))), screen, (36) * 8, screen.h - 8, Color.get(000, 200, 111, 533));
+			}
+			
+			ResourceItem ref = new ResourceItem(Resource.slime);
+			
+			if(player.inventory.count(ref) > 0){
+				screen.render((38) * 8, screen.h - 8, ref.getSprite(), Color.get(000, 200, 111, 533), 0);
+				Font.draw(""+(player.inventory.count(ref)), screen, (39) * 8, screen.h - 8, Color.get(000, 200, 111, 533));
+			}
+			
+			
+			if (player.staminaRechargeDelay > 0) {
+				if (player.staminaRechargeDelay / 4 % 2 == 0)
+					screen.render(i * 8, screen.h - 8, 1 + 12 * 32, Color.get(000, 555, 000, 000), 0);
+				else
+					screen.render(i * 8, screen.h - 8, 1 + 12 * 32, Color.get(000, 110, 000, 000), 0);
+			} else {
+				if (i < player.stamina)
+					screen.render(i * 8, screen.h - 8, 1 + 12 * 32, Color.get(000, 220, 550, 553), 0);
+				else
+					screen.render(i * 8, screen.h - 8, 1 + 12 * 32, Color.get(000, 110, 000, 000), 0);
+			}
+		}
+		if (player.activeItem != null) {
+			player.activeItem.renderInventory(screen, 10 * 8, screen.h - 16);
+		}
+
+		if (menu != null) {
+			menu.render(screen);
+		}
+	}
+
+	private void renderFocusNagger() {
+		String msg = "Game Paused";
+		int xx = (WIDTH - msg.length() * 8) / 2;
+		int yy = (HEIGHT - 8) / 2;
+		int w = msg.length();
+		int h = 1;
+
+		screen.render(xx - 8, yy - 8, 0 + 13 * 32, Color.get(-1, 1, 5, 445), 0);
+		screen.render(xx + w * 8, yy - 8, 0 + 13 * 32, Color.get(-1, 1, 5, 445), 1);
+		screen.render(xx - 8, yy + 8, 0 + 13 * 32, Color.get(-1, 1, 5, 445), 2);
+		screen.render(xx + w * 8, yy + 8, 0 + 13 * 32, Color.get(-1, 1, 5, 445), 3);
+		for (int x = 0; x < w; x++) {
+			screen.render(xx + x * 8, yy - 8, 1 + 13 * 32, Color.get(-1, 1, 5, 445), 0);
+			screen.render(xx + x * 8, yy + 8, 1 + 13 * 32, Color.get(-1, 1, 5, 445), 2);
+		}
+		for (int y = 0; y < h; y++) {
+			screen.render(xx - 8, yy + y * 8, 2 + 13 * 32, Color.get(-1, 1, 5, 445), 0);
+			screen.render(xx + w * 8, yy + y * 8, 2 + 13 * 32, Color.get(-1, 1, 5, 445), 1);
+		}
+
+		if ((tickCount / 20) % 2 == 0) {
+			Font.draw(msg, screen, xx, yy, Color.get(5, 333, 333, 333));
+		} else {
+			Font.draw(msg, screen, xx, yy, Color.get(5, 555, 555, 555));
+		}
+	}
+
+	public void scheduleLevelChange(int dir) {
+		pendingLevelChange = dir;
+	}
+
+	public static void main(String[] args) {
+		Game game = new Game();
+		game.setMinimumSize(new Dimension(WIDTH * SCALE, HEIGHT * SCALE));
+		game.setMaximumSize(new Dimension(WIDTH * SCALE, HEIGHT * SCALE));
+		game.setPreferredSize(new Dimension(WIDTH * SCALE, HEIGHT * SCALE));
+
+		JFrame frame = new JFrame(Game.NAME);
+		frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+		frame.setLayout(new BorderLayout());
+		frame.add(game, BorderLayout.CENTER);
+		frame.pack();
+		frame.setResizable(true);
+		frame.setLocationRelativeTo(null);
+		frame.setVisible(true);
+
+		game.start();
+	}
+
+	public void won() {
+		wonTimer = 60 * 3;
+		hasWon = true;
+	}
+}

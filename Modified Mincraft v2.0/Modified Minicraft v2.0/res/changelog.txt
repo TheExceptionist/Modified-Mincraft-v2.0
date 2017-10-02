@@ -1,0 +1,30 @@
+Minicraft v1.1.0
+-all mobs regenerate health
+-better inventory and item controls/selection
+
+Minicraft v1.1.5
+-all mobs have inventory
+-all mobs can pick up items
+-mobs drop all inventory items
+-food system to mobs
+
+Minicraft Patch v1.1.7
+-fixed an inventory bug
+-fixed a zombie crash bug
+-bigger screen
+-more key support
+-duplication big fix
+
+Minicraft v1.1.9
+-Added 1 Event:
+	Mob Horde
+-Randomized Mob Density
+-Random tool given at spawn
+-Reduced Stamina Use
+-Fixed a delete bug
+
+Will work on
+-Chest generation
+-rendering zombie swords
+-Health portraits on mobs
+
